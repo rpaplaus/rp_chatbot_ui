@@ -1,0 +1,7 @@
+gradio>=4.0.0
+openai
+anthropic
+google-genai
+python-dotenv
+pdfplumber
+pydantic
