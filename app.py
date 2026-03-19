@@ -208,5 +208,11 @@ with gr.Blocks(title="Programmer's Multi-LLM Chatbot") as demo:
     )
 
 if __name__ == "__main__":
-    demo.launch(theme=gr.themes.Ocean(), share=True)
-
+    app_user = os.getenv("APP_USER")
+    app_password = os.getenv("APP_PASSWORD")
+    
+    auth_credentials = None
+    if app_user and app_password:
+        auth_credentials = (app_user, app_password)
+        
+    demo.launch(theme=gr.themes.Ocean(), share=True, auth=auth_credentials)
