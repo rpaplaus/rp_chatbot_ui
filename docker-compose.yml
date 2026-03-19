@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  chatbot:
+    build: .
+    container_name: rp_chatbot_ui
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./memory:/app/memory
+    env_file:
+      - .env
+    restart: unless-stopped
