@@ -1,0 +1,56 @@
+{
+    # Global options
+    auto_https off
+    admin off
+}
+
+:80 {
+    # Structured logging to stdout
+    log {
+        output stdout
+        format console
+    }
+
+    # API Routes and SSE Streaming
+    handle /api/* {
+        reverse_proxy backend:8000 {
+            # Disable buffering for Server-Sent Events (SSE)
+            flush_interval -1
+            
+            # Forward headers
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # OpenAPI / Swagger Documentation
+    handle /docs* {
+        reverse_proxy backend:8000
+    }
+    handle /redoc* {
+        reverse_proxy backend:8000
+    }
+    handle /openapi.json* {
+        reverse_proxy backend:8000
+    }
+
+    # Frontend SPA
+    handle {
+        reverse_proxy frontend:80 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # Security Headers
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+}
+

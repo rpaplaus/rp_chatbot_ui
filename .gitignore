@@ -3,18 +3,48 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.egg
+*.egg-info/
+dist/
+build/
 
-# Environment
-.env
+# Virtual Environments
 venv/
 env/
 ENV/
+.venv/
 
-# Project specific
+# Environment Variables
+.env
+*.env.local
+
+# Database & Cache Data
+postgres_data/
+redis_data/
+*.sqlite3
+*.db
+
+# Uploads & Storage
+data/uploads/*
+!data/uploads/.gitkeep
 memory/
-Walkthrougt.txt
 
-# OS generated files
+# Caddy State
+infra/caddy/data/
+infra/caddy/config/
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+frontend/build/
+.npm
+.yarn/
+
+# IDE & OS generated files
+.idea/
+.vscode/
+*.swp
+*.swo
 .DS_Store
 .DS_Store?
 ._*
@@ -22,3 +52,4 @@ Walkthrougt.txt
 .Trashes
 ehthumbs.db
 Thumbs.db
+Walkthrougt.txt

@@ -5,3 +5,5 @@ google-genai
 python-dotenv
 pdfplumber
 pydantic
+ddgs
+tavily-python

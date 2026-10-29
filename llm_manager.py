@@ -14,18 +14,39 @@ class LLMManager:
             base_url=os.getenv("QWEN_BASE_URL", "https://dashscope-us.aliyuncs.com/compatible-mode/v1")
         ) if os.getenv("QWEN_API_KEY") else None
         
-    def generate_response(self, model_choice, messages):
+    def _inject_web_context(self, messages, web_search_context):
+        if not web_search_context:
+            return [m.copy() for m in messages]
+        
+        prepared_messages = [m.copy() for m in messages]
+        has_system = False
+        for m in prepared_messages:
+            if m["role"] == "system":
+                m["content"] = f"{m['content']}\n\n{web_search_context}"
+                has_system = True
+                break
+        
+        if not has_system:
+            prepared_messages.insert(0, {
+                "role": "system", 
+                "content": f"Você é um assistente prestativo e inteligente.\n\n{web_search_context}"
+            })
+        return prepared_messages
+
+    def generate_response(self, model_choice, messages, web_search_context=None):
         """Routes the request and returns a generator for streaming."""
+        enriched_messages = self._inject_web_context(messages, web_search_context)
+        
         if model_choice == "GPT-5 (OpenAI)":
-             return self._call_openai("gpt-5-2025-08-07", messages)
+             return self._call_openai("gpt-5-2025-08-07", enriched_messages)
         elif model_choice == "Claude Sonnet 4.6":
-             return self._call_anthropic("claude-sonnet-4-6", messages)
+             return self._call_anthropic("claude-sonnet-4-6", enriched_messages)
         elif model_choice == "Gemini-3":
-             return self._call_gemini("gemini-3.1-pro-preview", messages)
+             return self._call_gemini("gemini-3.1-pro-preview", enriched_messages)
         elif model_choice == "grok-4-1-fast-reasoning":
-             return self._call_xai("grok-4-1-fast-reasoning", messages)
+             return self._call_xai("grok-4-1-fast-reasoning", enriched_messages)
         elif model_choice == "Qwen3-Coder":
-             return self._call_qwen("qwen3.5-plus", messages)
+             return self._call_qwen("qwen3.5-plus", enriched_messages)
         else:
              def fallback():
                  yield "Model not implemented."

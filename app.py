@@ -4,10 +4,12 @@ from dotenv import load_dotenv
 from llm_manager import LLMManager
 from memory_manager import MemoryManager
 from file_parser import parse_file
+from web_search import WebSearchManager
 
 load_dotenv()
 
 llm_manager = LLMManager()
+web_search_manager = WebSearchManager()
 
 MODELS = [
     "GPT-5 (OpenAI)",
@@ -21,7 +23,7 @@ def get_session_choices():
     sessions = MemoryManager.get_all_sessions()
     return [(s["name"], s["id"]) for s in sessions]
 
-def chat(message, history, model_choice, session_id, system_prompt):
+def chat(message, history, model_choice, session_id, system_prompt, web_search_mode):
     memory = MemoryManager(session_id)
     
     user_text = ""
@@ -49,22 +51,42 @@ def chat(message, history, model_choice, session_id, system_prompt):
         yield {"text": "", "files": []}, memory.get_history(), gr.update()
         return
         
-    # Append to memory
+    # Append user message to memory
     memory.add_message("user", full_prompt)
     
     # We yield the User message right away
     yield {"text": "", "files": []}, memory.get_history(), gr.update()
+
+    # Web search handling
+    search_context = None
+    initial_assistant_content = ""
+    
+    should_search = web_search_manager.should_search(user_text or full_prompt, mode=web_search_mode)
+    if should_search:
+        search_query = web_search_manager.extract_search_query(user_text or full_prompt)
+        # Indicate search progress
+        memory.add_message("assistant", f"🔎 *Pesquisando na web por: \"{search_query}\"...*")
+        yield {"text": "", "files": []}, memory.get_history(), gr.update()
+        
+        results = web_search_manager.search(search_query)
+        if results:
+            search_context = web_search_manager.format_search_context(results)
+            initial_assistant_content = web_search_manager.format_sources_markdown(results, search_query)
+            memory.history[-1]["content"] = initial_assistant_content
+        else:
+            memory.history[-1]["content"] = "*(Nenhum resultado recente encontrado na busca online. Respondendo com conhecimento prévio...)*\n\n"
+        yield {"text": "", "files": []}, memory.get_history(), gr.update()
+    else:
+        # Create empty placeholder in memory for the assistant's reply
+        memory.add_message("assistant", "")
     
     # Generate response generator
-    messages_for_llm = memory.get_history().copy()
+    messages_for_llm = memory.get_history()[:-1].copy() # exclude the current in-progress assistant message
     if system_prompt and system_prompt.strip():
         # Inject system prompt at the beginning just for LLM, don't save to memory's history this way
         messages_for_llm.insert(0, {"role": "system", "content": system_prompt.strip()})
         
-    response_stream = llm_manager.generate_response(model_choice, messages_for_llm)
-    
-    # Create empty placeholder in memory for the assistant's reply
-    memory.add_message("assistant", "")
+    response_stream = llm_manager.generate_response(model_choice, messages_for_llm, web_search_context=search_context)
     
     for chunk in response_stream:
         # Update the latest assistant message directly
@@ -149,6 +171,19 @@ with gr.Blocks(title="Programmer's Multi-LLM Chatbot") as demo:
             gr.Markdown("---")
             gr.Markdown("### ⚙️ Settings")
             model_dropdown = gr.Dropdown(MODELS, value=MODELS[0], label="Select Model", interactive=True)
+            
+            gr.Markdown("### 🌐 Web Search (Internet)")
+            web_search_mode = gr.Radio(
+                choices=[
+                    ("🔍 Automático (Recomendado)", "auto"),
+                    ("⚡ Sempre Buscar Online", "always"),
+                    ("🚫 Desativado", "disabled")
+                ],
+                value="auto",
+                label="Busca em Tempo Real na Web",
+                info="Permite aos modelos consultar fatos e notícias recentes online."
+            )
+            
             system_prompt_input = gr.Textbox(label="System Prompt (Optional)", placeholder="Enter system instructions here...", lines=3)
             clear_btn = gr.Button("🧹 Clear Current Chat", variant="secondary")
             
@@ -173,7 +208,7 @@ with gr.Blocks(title="Programmer's Multi-LLM Chatbot") as demo:
     # Event Wiring
     chat_input.submit(
         chat,
-        inputs=[chat_input, chatbot, model_dropdown, session_id_state, system_prompt_input],
+        inputs=[chat_input, chatbot, model_dropdown, session_id_state, system_prompt_input, web_search_mode],
         outputs=[chat_input, chatbot, history_dropdown]
     )
     
