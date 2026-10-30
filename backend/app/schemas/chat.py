@@ -1,6 +1,6 @@
 import uuid
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 class AttachmentPayload(BaseModel):
     """Payload for file attachments included in a chat message."""
@@ -17,7 +17,11 @@ class UserMessageInput(BaseModel):
 class ChatCompletionRequest(BaseModel):
     """Request payload for starting a Server-Sent Events chat completion."""
     session_id: uuid.UUID = Field(..., example="8e3be249-e76c-49cc-8e65-ba5a029f3437")
-    message: UserMessageInput
+    message: Optional[UserMessageInput] = None
+    messages: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Array completo de histórico de mensagens [{'role': 'user'|'assistant', 'content': '...'}] fornecido pelo payload."
+    )
     model_name: Optional[str] = Field(default=None, example="GPT-5 (OpenAI)")
     profile_id: Optional[str] = Field(
         default="software_engineer",
@@ -32,6 +36,12 @@ class ChatCompletionRequest(BaseModel):
     web_search_mode: Optional[str] = Field(default="auto", pattern="^(auto|always|disabled)$")
     client_timezone: Optional[str] = Field(default=None, max_length=100, example="America/Sao_Paulo")
     client_local_time: Optional[str] = Field(default=None, max_length=64, example="2026-10-28 15:47")
+
+    @model_validator(mode="after")
+    def validate_message_or_messages(self) -> "ChatCompletionRequest":
+        if not self.message and not self.messages:
+            raise ValueError("Pelo menos um dos campos 'message' ou 'messages' deve ser fornecido.")
+        return self
 
 class SSEDoneData(BaseModel):
     """Event data sent when completion stream terminates successfully."""

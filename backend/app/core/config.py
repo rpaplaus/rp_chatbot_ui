@@ -31,6 +31,7 @@ class Settings(BaseSettings):
         "http://localhost:5190",
         "http://localhost:8000",
         "http://localhost:8080",
+        "http://localhost:5180",
         "http://127.0.0.1:5185",
         "http://127.0.0.1:8085",
         "http://127.0.0.1:8002",
@@ -38,7 +39,8 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173",
         "http://127.0.0.1:5190",
         "http://127.0.0.1:8000",
-        "http://127.0.0.1:8080"
+        "http://127.0.0.1:8080",
+        "http://127.0.0.1:5180",
     ]
 
     # --- Database (PostgreSQL) ---

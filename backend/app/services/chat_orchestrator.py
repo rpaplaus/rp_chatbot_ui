@@ -30,10 +30,17 @@ class ChatOrchestrator:
         "- Você está atuando como um Arquiteto e Engenheiro de Software Sênior.\n"
         "- A arquitetura padrão do usuário envolve Python (3.11+), FastAPI, React (TypeScript/Tailwind/Zustand), "
         "Docker e PostgreSQL (SQLAlchemy 2.0 Async).\n"
-        "- Salvo instrução explícita em contrário na conversa, priorize exemplos de código limpo, seguro, tipado, "
-        "padrões arquiteturais e recomendações técnicas alinhados a essa stack.\n"
-        "- Quando a ferramenta `search_web` estiver disponível, utilize-a proativamente para consultar documentações "
-        "atualizadas, releases, CVEs ou informações em tempo real, considerando a data atual do System Info."
+        "- MEMÓRIA DA SESSÃO E PRESERVAÇÃO DE CONTEXTO: Respeite e mantenha a continuidade de todas as mensagens "
+        "do histórico da conversa. Mesmo ao operar neste perfil, se o usuário ou a conversa anterior estiver "
+        "abordando temas de cibersegurança (ex: MITRE ATT&CK, CVEs, ameaças cibernéticas, SIEM/SOAR, DevSecOps) "
+        "ou qualquer outro domínio não focado estritamente na stack padrão, PRESERVE integralmente esse contexto "
+        "e NUNCA responda que não encontrou conversas anteriores nem force jargões ou código de SQLAlchemy/FastAPI a menos "
+        "que o usuário solicite explicitamente.\n"
+        "- HEURÍSTICA DE PESQUISA WEB (`search_web`): Ao formular a string de busca (search query), você DEVE "
+        "obrigatoriamente ler as últimas mensagens do histórico da conversa antes de decidir os termos da query. "
+        "NUNCA assuma ou injete termos padrão de programação (como 'SQLAlchemy', 'FastAPI', 'PostgreSQL') na busca "
+        "quando o histórico recente da conversa for sobre cibersegurança (ex: MITRE ATT&CK, análise de vulnerabilidades, ameaças) "
+        "ou outros assuntos. A query de busca deve refletir com fidelidade o contexto real da conversa."
     )
 
     PROFILE_GENERAL_ASSISTANT = (
@@ -98,10 +105,15 @@ class ChatOrchestrator:
     }
 
     CONTINUITY_PATTERNS = (
-        r"\b(esse|essa|isso|isto|nele|nela|nisso|acima|anterior|anteriores)\b",
-        r"\b(continue|continuar|explique melhor|detalhe|refatore|corrija|ajuste|melhore)\b",
-        r"\b(no código|na tabela|no exemplo|nessa lista|nesse resultado|também|mesmo)\b",
-        r"^(e\s+o|e\s+a|e\s+os|e\s+as|e\s+sobre|e\s+quanto|mas\s+e)\b"
+        r"\b(esse|essa|esses|essas|este|esta|estes|estas|isso|isto|aquilo|aquele|aquela|aqueles|aquelas)\b",
+        r"\b(disso|daquilo|desse|dessa|desses|dessas|deste|desta|destes|destas|nele|nela|neles|nelas|nisso|nisto|dele|dela|deles|delas)\b",
+        r"\b(anterior|anteriores|anteriormente|acima|abaixo|citado|citada|citados|citadas|mencionado|mencionada|mencionados|mencionadas)\b",
+        r"\b(falamos|falado|falada|discutimos|discutido|conversa|conversamos|histórico|historico|sessão|sessao|tópico|topico|assunto|contexto)\b",
+        r"\b(continue|continuar|prossiga|prosseguir|siga|seguinte|seguintes|explique melhor|detalhe|detalhar|mais detalhes|refatore|corrija|ajuste|melhore|aprofundar|aprofunde|resuma|resumo|sintetize|sintese|síntese|exemplifique|mostre mais|diga mais|fale mais)\b",
+        r"^(e\s+|mas\s+|ou\s+|então\s+|entao\s+|assim\s+|portanto\s+|além\s+disso|alem\s+disso|nesse\s+caso|neste\s+caso|com\s+base\s+|a\s+respeito\s+|em\s+relação\s+|em\s+relacao\s+|quanto\s+a)",
+        r"\b(no código|no codigo|na tabela|no exemplo|nessa lista|nesta lista|nesse resultado|neste resultado|também|tambem|mesmo|mesma|mesmos|mesmas)\b",
+        r"\b(não encontrou|nao encontrou|não achei|nao achei|o que você acha|o que voce acha|qual sua opinião|qual sua opiniao|o que achou|o que foi dito)\b",
+        r"\b(mitigação|mitigacao|mitigar|defesa|defender|ataque|ataques|ameaça|ameaca|ameaças|ameacas|vulnerabilidade|vulnerabilidades|cve|mitre|att&ck|ttp|ttps|tática|tatica|táticas|taticas|técnica|tecnica|técnicas|tecnicas|soc|siem|soar|ransomware|malware|phishing|exploit|exploits|payload|payloads)\b"
     )
 
     def __init__(self):
@@ -173,11 +185,37 @@ class ChatOrchestrator:
 
     @classmethod
     def _has_continuity_intent(cls, text: str) -> bool:
-        """Checks if the user prompt explicitly references previous messages in the conversation."""
+        """Checks if the user prompt references previous conversation messages or continues dialogue."""
         lowered = text.lower().strip()
         for pattern in cls.CONTINUITY_PATTERNS:
             if re.search(pattern, lowered):
                 return True
+        # In continuous conversation, short follow-up questions or queries starting with question words maintain continuity
+        words = lowered.split()
+        if len(words) <= 12 and any(lowered.startswith(w) for w in ["como", "qual", "quais", "quem", "onde", "quando", "porque", "por que", "o que", "diga", "explique", "e ", "mas ", "não", "nao"]):
+            return True
+        return False
+
+    @classmethod
+    def _is_explicit_standalone_task(cls, text: str) -> bool:
+        """
+        Determina se a mensagem do usuário é uma tarefa imperativa totalmente independente e autocontida
+        (ex: 'Implemente um endpoint FastAPI com SQLAlchemy...'), permitindo a poda de tópicos antigos.
+        Retorna False para perguntas conversacionais, follow-ups, dúvidas conceituais ou diálogos contínuos.
+        """
+        lowered = text.lower().strip()
+        if any(lowered.startswith(w) for w in ["como", "qual", "quais", "quem", "onde", "quando", "porque", "por que", "o que", "diga", "explique", "não", "nao", "pesquise", "busque"]):
+            return False
+        if "?" in lowered:
+            return False
+
+        standalone_patterns = (
+            r"^(implemente|escreva|crie|gere|construa|desenvolva|codifique|monte)\s+(um|uma|o|a)\s+(endpoint|função|funcao|classe|script|módulo|modulo|tabela|migração|migracao|dockerfile|serviço|servico)",
+        )
+        for pattern in standalone_patterns:
+            if re.search(pattern, lowered):
+                return True
+
         return False
 
     @classmethod
@@ -185,8 +223,9 @@ class ChatOrchestrator:
         """
         Higieniza e poda o histórico da conversa antes de enviar ao provedor LLM:
         1. Remove turnos com falhas de API/ferramentas ou respostas órfãs/vazias.
-        2. Detecta mudança abrupta de assunto (Topic Shift) e isola a nova pergunta para evitar vazamento de contexto.
-        3. Aplica limite máximo de janela deslizante (MAX_HISTORY_MESSAGES).
+        2. Detecta mudança abrupta de assunto (Topic Shift) em tarefas standalone autocontidas.
+        3. Preserva 100% da continuidade em conversas, follow-ups e transições de perfis.
+        4. Aplica limite máximo de janela deslizante (MAX_HISTORY_MESSAGES).
         """
         if not messages:
             return []
@@ -216,7 +255,7 @@ class ChatOrchestrator:
         if len(sanitized) <= 1:
             return sanitized
 
-        # Step 2: Topic Shift Detection on the latest user message
+        # Step 2: Topic Shift Detection exclusively on explicit standalone tasks
         last_msg = sanitized[-1]
         if last_msg.get("role") == "user" and len(sanitized) >= 3:
             current_text = last_msg.get("content", "")
@@ -226,11 +265,12 @@ class ChatOrchestrator:
                 prior_kw = cls._extract_semantic_keywords(prior_text)
 
                 if current_kw and prior_kw and len(current_kw & prior_kw) == 0:
-                    logger.info(
-                        f"[Context Pruning] Topic shift detected (0 keyword overlap). "
-                        f"Pruning {len(sanitized) - 1} prior messages to prevent context leakage."
-                    )
-                    return [last_msg]
+                    if cls._is_explicit_standalone_task(current_text):
+                        logger.info(
+                            f"[Context Pruning] Standalone task topic shift detected (0 keyword overlap). "
+                            f"Pruning {len(sanitized) - 1} prior messages to prevent context leakage."
+                        )
+                        return [last_msg]
 
         # Step 3: Sliding Window Cap (keep at most MAX_HISTORY_MESSAGES, starting with a 'user' message)
         if len(sanitized) > cls.MAX_HISTORY_MESSAGES:
@@ -239,6 +279,96 @@ class ChatOrchestrator:
                 sanitized = sanitized[1:]
 
         return sanitized
+
+    @classmethod
+    def contextualize_search_query(
+        cls,
+        search_query: str,
+        messages: List[Dict[str, str]],
+        profile_id: str = "software_engineer",
+        n_history: int = 4
+    ) -> str:
+        """
+        Ajuste do Agente de Pesquisa (Dev/Stack):
+        Lê as últimas N mensagens do histórico da conversa antes de decidir a string de busca final.
+        Evita que o agente de busca alucine ou assuma termos padrão de programação (ex: SQLAlchemy, FastAPI)
+        quando o contexto anterior da conversa for sobre cibersegurança (ex: MITRE ATT&CK, CVEs, TTPs, etc.).
+        """
+        raw_query = (search_query or "").strip()
+        if not raw_query:
+            return raw_query
+
+        # Read last N messages of history
+        recent_messages = [m for m in messages if (m.get("content") or "").strip()][-n_history:]
+        if not recent_messages:
+            return raw_query
+
+        history_text = " ".join(m.get("content", "") for m in recent_messages).lower()
+
+        # Detect cybersecurity domain markers in recent conversation history
+        cyber_markers = [
+            "mitre", "att&ck", "cve", "threat", "vulnerability", "vulnerabilidade",
+            "exploit", "soc", "siem", "soar", "incident", "incidente", "edr",
+            "ttp", "adversary", "cybersecurity", "cibersegurança", "malware",
+            "ransomware", "phishing", "zero-day", "nist nvd", "cisa", "kev"
+        ]
+        is_cyber_context = any(marker in history_text for marker in cyber_markers)
+
+        # Default programming stack terms that tend to be hallucinated by Dev/Stack profile
+        stack_hallucination_terms = [
+            "sqlalchemy", "fastapi", "react", "postgresql", "docker", "pydantic"
+        ]
+
+        query_lower = raw_query.lower()
+        contains_stack_term = any(t in query_lower for t in stack_hallucination_terms)
+
+        if is_cyber_context and contains_stack_term:
+            # Check if user explicitly requested these stack terms in their recent user prompts
+            recent_user_text = " ".join(
+                m.get("content", "").lower() for m in recent_messages if m.get("role") == "user"
+            )
+            hallucinated_in_query = [t for t in stack_hallucination_terms if t in query_lower]
+            truly_requested = [t for t in hallucinated_in_query if t in recent_user_text]
+
+            # If the stack terms in query were NOT explicitly requested by user in recent history:
+            if not truly_requested:
+                logger.warning(
+                    f"[Search Heuristic] Dev/Stack agent hallucinated programming terms {hallucinated_in_query} "
+                    f"in query '{raw_query}' while history is in cybersecurity context. Refining query..."
+                )
+                refined = raw_query
+                for term in hallucinated_in_query:
+                    refined = re.sub(
+                        rf"\b{re.escape(term)}\b(?:\s*2\.0(?:\s*async)?)?",
+                        "",
+                        refined,
+                        flags=re.IGNORECASE
+                    ).strip()
+                refined = re.sub(r"\s+", " ", refined).strip()
+
+                # If query became empty or lacks subject, re-anchor with the cybersecurity context from history
+                if not refined or len(refined.split()) <= 1:
+                    if "mitre" in history_text:
+                        refined = f"MITRE ATT&CK {refined}".strip()
+                    elif "cve" in history_text:
+                        cve_match = re.search(r"\bcve-\d{4}-\d+\b", history_text, re.IGNORECASE)
+                        cve_id = cve_match.group(0).upper() if cve_match else "CVE"
+                        refined = f"{cve_id} {refined}".strip()
+                    else:
+                        refined = f"cibersegurança {refined}".strip()
+
+                logger.info(f"[Search Heuristic] Refined search query from '{raw_query}' to '{refined}'")
+                return refined
+
+        # If query is vague or underspecified (e.g. 'técnicas de persistência', 'como mitigar') in a cyber context,
+        # anchor it with the specific framework from history if missing:
+        if is_cyber_context and len(raw_query.split()) <= 4:
+            if "mitre" in history_text and "mitre" not in query_lower:
+                anchored = f"MITRE ATT&CK {raw_query}"
+                logger.info(f"[Search Heuristic] Anchored underspecified query '{raw_query}' -> '{anchored}'")
+                return anchored
+
+        return raw_query
 
     async def stream_chat(
         self,
@@ -399,10 +529,18 @@ class ChatOrchestrator:
 
             # 7. If the LLM requested a Tool Call (`search_web`), execute Deep Scraping & Turn 2
             if pending_tool_call and provider.supports_web_search:
-                search_query = pending_tool_call.query.strip()
+                raw_search_query = pending_tool_call.query.strip()
+                search_query = self.contextualize_search_query(
+                    search_query=raw_search_query,
+                    messages=enriched_messages,
+                    profile_id=profile_id,
+                    n_history=4
+                )
+                pending_tool_call.query = search_query
+
                 logger.info(
                     f"[Agentic Tool Call] Provider '{provider.provider_name}' invoked "
-                    f"'{pending_tool_call.name}' with query: '{search_query}'"
+                    f"'{pending_tool_call.name}' with query: '{search_query}' (raw: '{raw_search_query}')"
                 )
 
                 # 7a. Emit real-time UI feedback ('search_start')

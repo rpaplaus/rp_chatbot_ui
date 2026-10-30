@@ -52,24 +52,49 @@ async def chat_completion_stream(
             detail=f"Sessão com ID '{session_id}' não encontrada."
         )
 
-    # 2. Persist user message immediately
+    # 2. Extract active user message and attachments
+    active_user_content = ""
+    active_user_attachments: List[Dict[str, Any]] = []
+
+    if request.message:
+        active_user_content = request.message.content.strip()
+        if request.message.attachments:
+            active_user_attachments = [
+                a.model_dump() for a in request.message.attachments
+            ]
+    elif request.messages:
+        for m in reversed(request.messages):
+            if m.get("role") == "user":
+                active_user_content = str(m.get("content", "")).strip()
+                meta = m.get("metadata_json") or {}
+                if isinstance(meta, dict) and meta.get("attachments"):
+                    active_user_attachments = meta.get("attachments")
+                elif m.get("attachments"):
+                    active_user_attachments = m.get("attachments")
+                break
+
+    if not active_user_content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Nenhuma mensagem válida de usuário encontrada no payload."
+        )
+
+    # 3. Persist user message immediately into PostgreSQL
     user_metadata: Dict[str, Any] = {}
-    if request.message.attachments:
-        user_metadata["attachments"] = [
-            a.model_dump() for a in request.message.attachments
-        ]
+    if active_user_attachments:
+        user_metadata["attachments"] = active_user_attachments
 
     user_msg = ChatMessage(
         session_id=session_id,
         role="user",
-        content=request.message.content,
+        content=active_user_content,
         metadata_json=user_metadata
     )
     db.add(user_msg)
     await db.commit()
     await db.refresh(user_msg)
 
-    # 3. Load full conversation history for context
+    # 4. Extract conversation history from DB and/or payload messages array
     hist_stmt = (
         select(ChatMessage)
         .where(ChatMessage.session_id == session_id)
@@ -77,17 +102,26 @@ async def chat_completion_stream(
     )
     hist_res = await db.execute(hist_stmt)
     history_messages = hist_res.scalars().all()
-    history_dicts = [{"role": m.role, "content": m.content} for m in history_messages]
+    db_history = [{"role": m.role, "content": m.content} for m in history_messages]
 
-    # Resolve settings
+    # If payload explicitly provided a messages array (e.g. headless / external API flow), prioritize it
+    if request.messages and len(request.messages) > 0:
+        history_dicts = [
+            {"role": str(m.get("role", "user")), "content": str(m.get("content", ""))}
+            for m in request.messages
+        ]
+    else:
+        history_dicts = db_history
+
+    # Resolve settings (preserving session attributes and respecting profile switch)
     target_model_name = request.model_name or session.model_name
     profile_id = request.profile_id or "software_engineer"
     system_prompt = request.system_prompt if request.system_prompt is not None else session.system_prompt
     web_search_mode = request.web_search_mode or session.web_search_mode
-    file_contexts = [a.model_dump() for a in request.message.attachments] if request.message.attachments else None
+    file_contexts = active_user_attachments if active_user_attachments else None
     client_timezone = request.client_timezone
     client_local_time = request.client_local_time
-    user_prompt_snippet = request.message.content.strip()
+    user_prompt_snippet = active_user_content
     user_id_val = current_user.id
 
     # 4. Define Asynchronous SSE Generator
