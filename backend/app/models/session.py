@@ -25,8 +25,8 @@ class ChatSession(Base, UUIDMixin, TimestampMixin):
         nullable=True
     )
     model_name: Mapped[str] = mapped_column(
-        String(100),
-        default="GPT-5 (OpenAI)",
+        String(150),
+        default="openai/gpt-5",
         nullable=False
     )
     web_search_mode: Mapped[str] = mapped_column(

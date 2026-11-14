@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     SEMANTIC_CACHE_ENABLED: bool = True
     SEMANTIC_CACHE_THRESHOLD: float = 0.95
     SEMANTIC_CACHE_DIMENSIONS: int = 512
-    SEMANTIC_CACHE_EMBEDDING_MODEL: str = "text-embedding-3-small"
+    SEMANTIC_CACHE_EMBEDDING_MODEL: str = "openai/text-embedding-3-small"
 
     # --- Security, JWT & Whitelist Admin Seed ---
     SECRET_KEY: str = "rp_chatbot_super_secret_session_key_2026_x99!"
@@ -82,7 +82,14 @@ class Settings(BaseSettings):
     APP_PASSWORD: str = "Dumai!605Bacon"
     APP_EMAIL: str = "admin@rpaplaus.com"
 
-    # --- LLM Providers API Keys ---
+    # --- OpenRouter Unified LLM Gateway ---
+    OPENROUTER_API_KEY: Optional[str] = None
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    OPENROUTER_APP_URL: str = "https://chat.rpaplaus.com"
+    OPENROUTER_APP_NAME: str = "RP_ChatBot"
+    DEFAULT_OPENROUTER_MODEL: str = "openai/gpt-5"
+
+    # --- Legacy LLM Keys (Optional fallback) ---
     OPENAI_API_KEY: Optional[str] = None
     ANTHROPIC_API_KEY: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
@@ -105,13 +112,9 @@ class Settings(BaseSettings):
         return self.XAI_API_KEY or self.GROK_API_KEY
 
     def get_provider_status(self) -> Dict[str, bool]:
-        """Returns the readiness status of each LLM provider."""
+        """Returns the readiness status of OpenRouter and auxiliary providers."""
         return {
-            "openai": bool(self.OPENAI_API_KEY and self.OPENAI_API_KEY.strip()),
-            "anthropic": bool(self.ANTHROPIC_API_KEY and self.ANTHROPIC_API_KEY.strip()),
-            "gemini": bool(self.effective_gemini_key and self.effective_gemini_key.strip()),
-            "xai": bool(self.effective_xai_key and self.effective_xai_key.strip()),
-            "qwen": bool(self.QWEN_API_KEY and self.QWEN_API_KEY.strip()),
+            "openrouter": bool(self.OPENROUTER_API_KEY and self.OPENROUTER_API_KEY.strip()),
             "tavily": bool(self.TAVILY_API_KEY and self.TAVILY_API_KEY.strip()),
         }
 
@@ -120,16 +123,12 @@ class Settings(BaseSettings):
         status = self.get_provider_status()
         return [provider for provider, is_active in status.items() if is_active]
 
-    def get_available_models(self) -> List[Dict[str, str]]:
-        """Returns list of models that can currently be executed based on active keys."""
-        status = self.get_provider_status()
-        catalog = [
-            {"id": "gpt-5-2025-08-07", "name": "GPT-5 (OpenAI)", "provider": "openai"},
-            {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6", "provider": "anthropic"},
-            {"id": "gemini-3.1-pro-preview", "name": "Gemini-3", "provider": "gemini"},
-            {"id": "grok-4-1-fast-reasoning", "name": "grok-4-1-fast-reasoning", "provider": "xai"},
-            {"id": "qwen3.5-plus", "name": "Qwen3-Coder", "provider": "qwen"},
+    def get_available_models(self) -> List[Dict[str, Any]]:
+        """Returns initial default OpenRouter models before dynamic catalog hydration."""
+        if not (self.OPENROUTER_API_KEY and self.OPENROUTER_API_KEY.strip()):
+            return []
+        return [
+            {"id": self.DEFAULT_OPENROUTER_MODEL, "name": "OpenAI: GPT-5", "provider": "openai"},
         ]
-        return [m for m in catalog if status.get(m["provider"], False)]
 
 settings = Settings()

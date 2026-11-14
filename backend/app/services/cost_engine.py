@@ -11,37 +11,48 @@ logger = logging.getLogger(__name__)
 # Pricing table in USD per 1,000,000 (1M) tokens: (input_usd_per_1m, output_usd_per_1m)
 MODEL_PRICING_PER_1M: Dict[str, Tuple[Decimal, Decimal]] = {
     # OpenAI (GPT-5)
+    "openai/gpt-5": (Decimal("1.25"), Decimal("10.00")),
     "gpt-5-2025-08-07": (Decimal("2.50"), Decimal("10.00")),
     "gpt-5": (Decimal("2.50"), Decimal("10.00")),
     "gpt-5 (openai)": (Decimal("2.50"), Decimal("10.00")),
 
     # Anthropic (Claude Sonnet 4.6)
+    "anthropic/claude-sonnet-4.6": (Decimal("3.00"), Decimal("15.00")),
     "claude-sonnet-4-6": (Decimal("3.00"), Decimal("15.00")),
     "claude sonnet 4.6": (Decimal("3.00"), Decimal("15.00")),
     "claude": (Decimal("3.00"), Decimal("15.00")),
 
     # Google Gemini (Gemini 3.1 Pro)
+    "google/gemini-3.1-pro-preview": (Decimal("1.25"), Decimal("5.00")),
     "gemini-3.1-pro-preview": (Decimal("1.25"), Decimal("5.00")),
     "gemini-3": (Decimal("1.25"), Decimal("5.00")),
     "gemini": (Decimal("1.25"), Decimal("5.00")),
 
     # xAI (Grok-4)
+    "x-ai/grok-4.6": (Decimal("2.00"), Decimal("10.00")),
     "grok-4-1-fast-reasoning": (Decimal("2.00"), Decimal("10.00")),
     "grok-4": (Decimal("2.00"), Decimal("10.00")),
     "grok": (Decimal("2.00"), Decimal("10.00")),
 
     # Alibaba Qwen (Qwen3-Coder / Qwen3.5-Plus)
+    "qwen/qwen3-coder": (Decimal("0.80"), Decimal("2.40")),
     "qwen3.5-plus": (Decimal("0.80"), Decimal("2.40")),
     "qwen3-coder": (Decimal("0.80"), Decimal("2.40")),
     "qwen": (Decimal("0.80"), Decimal("2.40")),
 }
 
 PROVIDER_FALLBACK_PRICING_PER_1M: Dict[str, Tuple[Decimal, Decimal]] = {
+    "openrouter": (Decimal("1.50"), Decimal("6.00")),
     "openai": (Decimal("2.50"), Decimal("10.00")),
     "anthropic": (Decimal("3.00"), Decimal("15.00")),
+    "google": (Decimal("1.25"), Decimal("5.00")),
     "gemini": (Decimal("1.25"), Decimal("5.00")),
+    "x-ai": (Decimal("2.00"), Decimal("10.00")),
     "xai": (Decimal("2.00"), Decimal("10.00")),
     "qwen": (Decimal("0.80"), Decimal("2.40")),
+    "deepseek": (Decimal("0.55"), Decimal("2.19")),
+    "meta-llama": (Decimal("0.40"), Decimal("0.80")),
+    "mistralai": (Decimal("1.00"), Decimal("3.00")),
 }
 
 ONE_MILLION = Decimal("1000000")
@@ -51,13 +62,27 @@ COST_QUANTIZE = Decimal("0.00000001")
 class CostEngine:
     """
     Central FinOps pricing engine for calculating token usage costs in USD
-    across all 5 integrated LLM providers.
+    across all OpenRouter models (using real-time catalog pricing with fallback rates).
     """
 
     @classmethod
     def get_rates_per_1m(cls, model_name: str, provider: str = "") -> Tuple[Decimal, Decimal]:
-        """Returns (input_rate_per_1m, output_rate_per_1m) in USD for a model or provider."""
+        """Returns (input_rate_per_1m, output_rate_per_1m) in USD for an OpenRouter model or provider."""
         norm_model = (model_name or "").strip().lower()
+
+        # 1. Check live OpenRouter catalog pricing first
+        try:
+            from app.services.llm.openrouter_provider import OpenRouterCatalog
+            live_rates = OpenRouterCatalog.get_cached_pricing_per_1m(norm_model)
+            if live_rates is not None:
+                return live_rates
+        except Exception:
+            pass
+
+        if norm_model.endswith(":free"):
+            return (Decimal("0.00"), Decimal("0.00"))
+
+        # 2. Check static pricing map
         if norm_model in MODEL_PRICING_PER_1M:
             return MODEL_PRICING_PER_1M[norm_model]
 
@@ -66,11 +91,14 @@ class CostEngine:
                 return rates
 
         norm_provider = (provider or "").strip().lower()
+        if not norm_provider and "/" in norm_model:
+            norm_provider = norm_model.split("/", 1)[0]
+
         if norm_provider in PROVIDER_FALLBACK_PRICING_PER_1M:
             return PROVIDER_FALLBACK_PRICING_PER_1M[norm_provider]
 
         # Default fallback rate if unmapped
-        return (Decimal("2.00"), Decimal("8.00"))
+        return (Decimal("1.50"), Decimal("6.00"))
 
     @classmethod
     def calculate_cost_usd(

@@ -1,8 +1,10 @@
 import {
   AdminUsageSummaryResponse,
   ChatSession,
+  DEFAULT_OPENROUTER_MODEL,
   FileUploadResponse,
   HealthResponse,
+  ModelOption,
   UserUsageSummaryResponse,
   WebSearchMode
 } from '../types/chat';
@@ -56,6 +58,12 @@ export const apiService = {
     return res.json();
   },
 
+  async listModels(refresh = false): Promise<{ total: number; default_model: string; models: ModelOption[] }> {
+    const res = await fetch(`${API_BASE}/health/models${refresh ? '?refresh=true' : ''}`);
+    if (!res.ok) throw new Error('Falha ao carregar catálogo de modelos OpenRouter');
+    return res.json();
+  },
+
   async listSessions(): Promise<ChatSession[]> {
     const res = await fetchWithAuth(`${API_BASE}/sessions`);
     if (!res.ok) throw new Error('Falha ao carregar sessões');
@@ -73,7 +81,7 @@ export const apiService = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         title: params?.title || 'New Chat',
-        model_name: params?.model_name || 'GPT-5 (OpenAI)',
+        model_name: params?.model_name || DEFAULT_OPENROUTER_MODEL,
         system_prompt: params?.system_prompt || null,
         web_search_mode: params?.web_search_mode || 'auto'
       })

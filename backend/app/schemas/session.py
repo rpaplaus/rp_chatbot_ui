@@ -7,7 +7,7 @@ from app.schemas.message import MessageResponse
 class SessionBase(BaseModel):
     title: str = Field(default="New Chat", max_length=255)
     system_prompt: Optional[str] = None
-    model_name: str = Field(default="GPT-5 (OpenAI)", max_length=100)
+    model_name: str = Field(default="openai/gpt-5", max_length=150)
     web_search_mode: str = Field(default="auto", pattern="^(auto|always|disabled)$")
 
 class SessionCreate(SessionBase):
@@ -16,7 +16,7 @@ class SessionCreate(SessionBase):
 class SessionUpdate(BaseModel):
     title: Optional[str] = Field(None, max_length=255)
     system_prompt: Optional[str] = None
-    model_name: Optional[str] = Field(None, max_length=100)
+    model_name: Optional[str] = Field(None, max_length=150)
     web_search_mode: Optional[str] = Field(None, pattern="^(auto|always|disabled)$")
 
 class SessionResponse(SessionBase):

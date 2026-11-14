@@ -62,7 +62,16 @@ class SemanticCacheService:
     @classmethod
     def _get_embedding_client(cls) -> Optional[AsyncOpenAI]:
         if cls._openai_client is None:
-            if settings.OPENAI_API_KEY and settings.OPENAI_API_KEY.strip():
+            if settings.OPENROUTER_API_KEY and settings.OPENROUTER_API_KEY.strip():
+                cls._openai_client = AsyncOpenAI(
+                    api_key=settings.OPENROUTER_API_KEY.strip(),
+                    base_url=settings.OPENROUTER_BASE_URL,
+                    default_headers={
+                        "HTTP-Referer": settings.OPENROUTER_APP_URL,
+                        "X-Title": settings.OPENROUTER_APP_NAME,
+                    },
+                )
+            elif settings.OPENAI_API_KEY and settings.OPENAI_API_KEY.strip():
                 cls._openai_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY.strip())
         return cls._openai_client
 

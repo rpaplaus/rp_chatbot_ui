@@ -33,38 +33,73 @@ interface ProviderMeta {
 const PROVIDER_CATALOG: Record<string, ProviderMeta> = {
   openai: {
     label: 'OpenAI',
-    modelDisplay: 'GPT-5 (gpt-5-2025-08-07)',
-    rateInfo: '$2.50 / $10.00 por 1M',
+    modelDisplay: 'openai/gpt-5',
+    rateInfo: 'OpenRouter API',
     badgeClass: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
     barClass: 'from-emerald-500 to-teal-400'
   },
   anthropic: {
     label: 'Anthropic',
-    modelDisplay: 'Claude Sonnet 4.6',
-    rateInfo: '$3.00 / $15.00 por 1M',
+    modelDisplay: 'anthropic/claude-sonnet-4.6',
+    rateInfo: 'OpenRouter API',
     badgeClass: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
     barClass: 'from-amber-500 to-orange-400'
   },
-  gemini: {
-    label: 'Google Gemini',
-    modelDisplay: 'Gemini 3.1 Pro Preview',
-    rateInfo: '$1.25 / $5.00 por 1M',
+  google: {
+    label: 'Google',
+    modelDisplay: 'google/gemini-3.1-pro-preview',
+    rateInfo: 'OpenRouter API',
     badgeClass: 'bg-blue-500/15 text-blue-300 border-blue-500/30',
     barClass: 'from-blue-500 to-cyan-400'
   },
+  gemini: {
+    label: 'Google Gemini',
+    modelDisplay: 'google/gemini-3.1-pro-preview',
+    rateInfo: 'OpenRouter API',
+    badgeClass: 'bg-blue-500/15 text-blue-300 border-blue-500/30',
+    barClass: 'from-blue-500 to-cyan-400'
+  },
+  'x-ai': {
+    label: 'xAI',
+    modelDisplay: 'x-ai/grok-4.6',
+    rateInfo: 'OpenRouter API',
+    badgeClass: 'bg-purple-500/15 text-purple-300 border-purple-500/30',
+    barClass: 'from-purple-500 to-fuchsia-400'
+  },
   xai: {
     label: 'xAI Grok',
-    modelDisplay: 'Grok-4 Fast Reasoning',
-    rateInfo: '$2.00 / $10.00 por 1M',
+    modelDisplay: 'x-ai/grok-4.6',
+    rateInfo: 'OpenRouter API',
     badgeClass: 'bg-purple-500/15 text-purple-300 border-purple-500/30',
     barClass: 'from-purple-500 to-fuchsia-400'
   },
   qwen: {
-    label: 'Alibaba Qwen',
-    modelDisplay: 'Qwen3-Coder (qwen3.5-plus)',
-    rateInfo: '$0.80 / $2.40 por 1M',
+    label: 'Qwen',
+    modelDisplay: 'qwen/qwen3-coder',
+    rateInfo: 'OpenRouter API',
     badgeClass: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30',
     barClass: 'from-indigo-500 to-violet-400'
+  },
+  deepseek: {
+    label: 'DeepSeek',
+    modelDisplay: 'deepseek/deepseek-r1',
+    rateInfo: 'OpenRouter API',
+    badgeClass: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30',
+    barClass: 'from-cyan-500 to-blue-400'
+  },
+  'meta-llama': {
+    label: 'Meta Llama',
+    modelDisplay: 'meta-llama/llama-4-maverick',
+    rateInfo: 'OpenRouter API',
+    badgeClass: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
+    barClass: 'from-sky-500 to-indigo-400'
+  },
+  mistralai: {
+    label: 'Mistral',
+    modelDisplay: 'mistralai/mistral-large',
+    rateInfo: 'OpenRouter API',
+    badgeClass: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
+    barClass: 'from-rose-500 to-amber-400'
   }
 };
 
@@ -80,43 +115,17 @@ function formatNumber(num: number): string {
 }
 
 function mergeWithAllProviders(items: ModelUsageBreakdown[], totalCost: number): ModelUsageBreakdown[] {
-  const mapByProvider = new Map<string, ModelUsageBreakdown>();
-
-  for (const item of items) {
-    const key = item.provider.toLowerCase();
-    const existing = mapByProvider.get(key);
-    if (existing) {
-      existing.request_count += item.request_count;
-      existing.prompt_tokens += item.prompt_tokens;
-      existing.completion_tokens += item.completion_tokens;
-      existing.total_tokens += item.total_tokens;
-      existing.total_cost_usd += item.total_cost_usd;
-      existing.percentage_of_cost =
-        totalCost > 0 ? Number(((existing.total_cost_usd / totalCost) * 100).toFixed(2)) : 0;
-    } else {
-      mapByProvider.set(key, { ...item });
-    }
+  if (!items || items.length === 0) {
+    return [];
   }
 
-  const allProviders = ['openai', 'anthropic', 'gemini', 'xai', 'qwen'];
-  for (const prov of allProviders) {
-    if (!mapByProvider.has(prov)) {
-      mapByProvider.set(prov, {
-        provider: prov,
-        model_name: PROVIDER_CATALOG[prov]?.modelDisplay || prov,
-        request_count: 0,
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: 0,
-        total_cost_usd: 0,
-        percentage_of_cost: 0
-      });
-    }
-  }
-
-  return Array.from(mapByProvider.values()).sort(
-    (a, b) => b.total_cost_usd - a.total_cost_usd || b.total_tokens - a.total_tokens
-  );
+  return items
+    .map((item) => ({
+      ...item,
+      percentage_of_cost:
+        totalCost > 0 ? Number(((item.total_cost_usd / totalCost) * 100).toFixed(2)) : 0
+    }))
+    .sort((a, b) => b.total_cost_usd - a.total_cost_usd || b.total_tokens - a.total_tokens);
 }
 
 export const TelemetryDashboard: React.FC = () => {
@@ -188,7 +197,7 @@ export const TelemetryDashboard: React.FC = () => {
                 </span>
               </h2>
               <p className="text-xs text-slate-400">
-                Monitoramento em tempo real dos 5 provedores de IA (OpenAI, Anthropic, Gemini, xAI e Qwen)
+                Monitoramento em tempo real do consumo e custos por modelo via OpenRouter
               </p>
             </div>
           </div>
@@ -323,10 +332,10 @@ export const TelemetryDashboard: React.FC = () => {
                 <div className="flex items-center justify-between">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
                     <TrendingUp className="w-4 h-4 text-indigo-400" />
-                    Detalhamento Financeiro por Provedor de IA (5 Modelos)
+                    Detalhamento Financeiro por Modelo (OpenRouter)
                   </h3>
                   <span className="text-[11px] text-slate-400">
-                    Tarifação oficial por 1M tokens (Input / Output)
+                    Tarifação dinâmica por 1M tokens (Input / Output)
                   </span>
                 </div>
 

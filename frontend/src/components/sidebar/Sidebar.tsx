@@ -9,6 +9,7 @@ export const Sidebar: React.FC = () => {
     sessions,
     activeSessionId,
     isSidebarOpen,
+    availableModels,
     health,
     selectSession,
     createNewSession,
@@ -187,12 +188,12 @@ export const Sidebar: React.FC = () => {
                   }`}
                 />
                 <span className="truncate font-medium text-slate-300">
-                  {health?.status === 'healthy' ? 'Clusters Online' : 'Conectando...'}
+                  {health?.status === 'healthy' ? 'OpenRouter Online' : 'Conectando...'}
                 </span>
               </div>
               <div className="flex items-center gap-1 text-[11px] text-slate-500">
                 <Activity className="w-3.5 h-3.5 text-indigo-400" />
-                <span>{health?.active_providers?.length || 5} LLMs</span>
+                <span>{availableModels.length} Modelos</span>
               </div>
             </div>
           </div>

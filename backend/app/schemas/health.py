@@ -1,4 +1,4 @@
-from typing import List, Dict
+from typing import List, Dict, Any
 from pydantic import BaseModel, Field
 
 class HealthResponse(BaseModel):
@@ -7,6 +7,6 @@ class HealthResponse(BaseModel):
     environment: str = Field(..., example="production")
     database: str = Field(..., example="connected")
     redis: str = Field(..., example="connected")
-    active_providers: List[str] = Field(..., example=["openai", "anthropic", "gemini", "xai", "qwen"])
-    available_models: List[Dict[str, str]] = Field(..., example=[{"id": "gpt-5-2025-08-07", "name": "GPT-5 (OpenAI)"}])
+    active_providers: List[str] = Field(..., example=["openrouter"])
+    available_models: List[Dict[str, Any]] = Field(..., example=[{"id": "openai/gpt-5", "name": "OpenAI: GPT-5", "provider": "openai"}])
 

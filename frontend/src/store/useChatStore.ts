@@ -4,17 +4,27 @@ import {
   ChatMessage,
   ChatProfileId,
   ChatSession,
+  DEFAULT_OPENROUTER_MODEL,
   HealthResponse,
+  LEGACY_MODEL_ID_MAP,
+  ModelOption,
   SUPPORTED_MODELS,
   WebSearchMode
 } from '../types/chat';
 import { apiService } from '../services/api';
 import { streamChatCompletion } from '../services/sse';
 
+function normalizeModelId(modelName?: string | null): string {
+  if (!modelName) return DEFAULT_OPENROUTER_MODEL;
+  const trimmed = modelName.trim();
+  return LEGACY_MODEL_ID_MAP[trimmed] || trimmed;
+}
+
 interface ChatState {
   sessions: ChatSession[];
   activeSessionId: string | null;
   messages: ChatMessage[];
+  availableModels: ModelOption[];
   selectedModel: string;
   activeProfile: ChatProfileId;
   systemPrompt: string;
@@ -33,6 +43,7 @@ interface ChatState {
   // Actions
   initApp: () => Promise<void>;
   refreshHealth: () => Promise<void>;
+  refreshModels: (force?: boolean) => Promise<void>;
   selectSession: (sessionId: string) => Promise<void>;
   createNewSession: () => Promise<void>;
   renameSession: (sessionId: string, newTitle: string) => Promise<void>;
@@ -57,7 +68,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessions: [],
   activeSessionId: null,
   messages: [],
-  selectedModel: SUPPORTED_MODELS[0].id,
+  availableModels: SUPPORTED_MODELS,
+  selectedModel: DEFAULT_OPENROUTER_MODEL,
   activeProfile: 'software_engineer',
   systemPrompt: '',
   webSearchMode: 'auto',
@@ -80,7 +92,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
         apiService.listSessions()
       ]);
 
-      set({ health: healthData, sessions: sessionsList });
+      const catalogModels =
+        healthData?.available_models && healthData.available_models.length > 0
+          ? healthData.available_models
+          : SUPPORTED_MODELS;
+
+      set({
+        health: healthData,
+        availableModels: catalogModels,
+        sessions: sessionsList
+      });
 
       if (sessionsList.length > 0) {
         await get().selectSession(sessionsList[0].id);
@@ -97,21 +118,38 @@ export const useChatStore = create<ChatState>((set, get) => ({
   refreshHealth: async () => {
     try {
       const healthData = await apiService.checkHealth();
-      set({ health: healthData });
+      set((state) => ({
+        health: healthData,
+        availableModels:
+          healthData.available_models && healthData.available_models.length > 0
+            ? healthData.available_models
+            : state.availableModels
+      }));
     } catch {
       set({ health: null });
+    }
+  },
+
+  refreshModels: async (force = false) => {
+    try {
+      const res = await apiService.listModels(force);
+      if (res.models && res.models.length > 0) {
+        set({ availableModels: res.models });
+      }
+    } catch {
+      // Keep existing availableModels on error
     }
   },
 
   selectSession: async (sessionId: string) => {
     try {
       const detailed = await apiService.getSessionDetails(sessionId);
-      const resolvedModel = detailed.model_name || SUPPORTED_MODELS[0].id;
+      const resolvedModel = normalizeModelId(detailed.model_name);
       set((state) => ({
         activeSessionId: detailed.id,
         messages: detailed.messages || [],
         selectedModel: resolvedModel,
-        activeProfile: resolvedModel === 'Qwen3-Coder' ? 'software_engineer' : state.activeProfile,
+        activeProfile: state.activeProfile,
         systemPrompt: detailed.system_prompt || '',
         webSearchMode: (detailed.web_search_mode as WebSearchMode) || 'auto',
         error: null
@@ -185,22 +223,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   setModel: async (modelName: string) => {
-    set((state) => ({
-      selectedModel: modelName,
-      activeProfile: modelName === 'Qwen3-Coder' ? 'software_engineer' : state.activeProfile
-    }));
+    const normalized = normalizeModelId(modelName);
+    set({ selectedModel: normalized });
     const { activeSessionId } = get();
     if (activeSessionId) {
-      await apiService.updateSession(activeSessionId, { model_name: modelName }).catch(() => {});
+      await apiService.updateSession(activeSessionId, { model_name: normalized }).catch(() => {});
     }
   },
 
   setActiveProfile: (profile: ChatProfileId) => {
-    const { selectedModel } = get();
-    if (selectedModel === 'Qwen3-Coder' && profile === 'general_assistant') {
-      set({ activeProfile: 'software_engineer' });
-      return;
-    }
     set({ activeProfile: profile });
   },
 
@@ -274,8 +305,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
     if (!targetSessionId) return;
 
-    const effectiveProfile: ChatProfileId =
-      selectedModel === 'Qwen3-Coder' ? 'software_engineer' : activeProfile;
+    const effectiveProfile: ChatProfileId = activeProfile;
     const attachmentsToSend = [...pendingAttachments];
     const promptText = content.trim() || `Analise o(s) arquivo(s): ${attachmentsToSend.map((a) => a.filename).join(', ')}`;
 

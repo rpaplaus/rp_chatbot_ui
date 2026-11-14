@@ -21,7 +21,7 @@ export const ChatArea: React.FC = () => {
     sendMessage
   } = useChatStore();
 
-  const effectiveProfile = selectedModel === 'Qwen3-Coder' ? 'software_engineer' : activeProfile;
+  const effectiveProfile = activeProfile;
 
   const bottomRef = useRef<HTMLDivElement>(null);
 

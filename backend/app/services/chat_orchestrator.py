@@ -84,6 +84,7 @@ class ChatOrchestrator:
 
     FAILURE_MARKERS = (
         "⚠️ *Erro",
+        "[OpenRouter Error:",
         "[OpenAI Error:",
         "[Anthropic Error:",
         "[xAI Error:",
@@ -613,11 +614,14 @@ class ChatOrchestrator:
                     "query_embedding": cache_lookup.query_embedding
                 }
 
+            from app.services.llm.openrouter_provider import extract_provider_slug
+            effective_provider_slug = extract_provider_slug(target_model_id)
+
             yield {
                 "event": "done",
                 "data": {
                     "model": target_model_id,
-                    "provider": provider.provider_name,
+                    "provider": effective_provider_slug,
                     "sources": sources_metadata.get("sources", []) if sources_metadata else [],
                     "full_response": full_response_text,
                     "cached": False,
@@ -626,7 +630,7 @@ class ChatOrchestrator:
                         "prompt_tokens": total_prompt_tokens,
                         "completion_tokens": total_completion_tokens,
                         "total_tokens": total_prompt_tokens + total_completion_tokens,
-                        "provider": provider.provider_name,
+                        "provider": effective_provider_slug,
                         "model": target_model_id
                     }
                 }

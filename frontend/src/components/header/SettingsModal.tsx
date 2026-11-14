@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { X, Terminal, Globe, Trash2, Save, Code2, Compass, Lock } from 'lucide-react';
+import { X, Terminal, Globe, Trash2, Save, Code2, Compass } from 'lucide-react';
 import { useChatStore } from '../../store/useChatStore';
-import { CHAT_PROFILES, ChatProfileId, WebSearchMode } from '../../types/chat';
+import { CHAT_PROFILES, WebSearchMode } from '../../types/chat';
 
 export const SettingsModal: React.FC = () => {
   const {
     isSettingsOpen,
-    selectedModel,
     activeProfile,
     systemPrompt,
     webSearchMode,
@@ -18,7 +17,6 @@ export const SettingsModal: React.FC = () => {
   } = useChatStore();
 
   const [promptValue, setPromptValue] = useState(systemPrompt);
-  const isCodeSpecialistModel = selectedModel === 'Qwen3-Coder';
 
   useEffect(() => {
     setPromptValue(systemPrompt);
@@ -68,22 +66,15 @@ export const SettingsModal: React.FC = () => {
             </label>
             <div className="grid grid-cols-2 gap-2.5">
               {CHAT_PROFILES.map((profile) => {
-                const isLocked = isCodeSpecialistModel && profile.id === 'general_assistant';
-                const effectiveProfile: ChatProfileId = isCodeSpecialistModel
-                  ? 'software_engineer'
-                  : activeProfile;
-                const isSelected = effectiveProfile === profile.id;
+                const isSelected = activeProfile === profile.id;
 
                 return (
                   <button
                     key={profile.id}
                     type="button"
-                    disabled={isLocked}
                     onClick={() => setActiveProfile(profile.id)}
                     className={`p-3 rounded-xl border text-left transition-all ${
-                      isLocked
-                        ? 'bg-slate-950/30 border-slate-800/60 text-slate-600 cursor-not-allowed opacity-60'
-                        : isSelected
+                      isSelected
                         ? profile.id === 'software_engineer'
                           ? 'bg-indigo-600/20 border-indigo-500 text-indigo-200'
                           : 'bg-emerald-600/20 border-emerald-500 text-emerald-200'
@@ -99,12 +90,9 @@ export const SettingsModal: React.FC = () => {
                         )}
                         {profile.name}
                       </span>
-                      {isLocked && <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
                     </div>
                     <div className="text-[10px] opacity-80 mt-1 leading-relaxed">
-                      {isLocked
-                        ? 'Indisponível para Qwen3-Coder (Especialista exclusivo em Código)'
-                        : profile.description}
+                      {profile.description}
                     </div>
                   </button>
                 );
