@@ -142,7 +142,12 @@ class CostEngine:
             if isinstance(content, str):
                 total_chars += len(content)
             elif isinstance(content, list):
-                total_chars += len(str(content))
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        total_chars += len(part.get("text", ""))
+                    else:
+                        # Images/audio are billed per media item, not by base64 length (~1k tokens heuristic).
+                        total_chars += 4000
         return max(1, (total_chars + 3) // 4)
 
 

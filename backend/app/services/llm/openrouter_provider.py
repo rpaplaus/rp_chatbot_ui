@@ -114,7 +114,14 @@ class OpenRouterCatalog:
         completion_per_1m = cls._parse_rate_per_1m(pricing.get("completion", "0"))
 
         supported_params = raw.get("supported_parameters") or []
-        supports_tools = isinstance(supported_params, list) and ("tools" in supported_params)
+        if not isinstance(supported_params, list):
+            supported_params = []
+        supports_tools = "tools" in supported_params
+
+        architecture = raw.get("architecture") or {}
+        input_modalities = architecture.get("input_modalities") or ["text"]
+        top_provider = raw.get("top_provider") or {}
+        max_completion_tokens = top_provider.get("max_completion_tokens")
 
         provider_slug = extract_provider_slug(model_id)
         badge = get_provider_badge(provider_slug)
@@ -140,6 +147,11 @@ class OpenRouterCatalog:
             "prompt_price_per_1m": float(round(prompt_per_1m, 4)),
             "completion_price_per_1m": float(round(completion_per_1m, 4)),
             "supports_tools": supports_tools,
+            "supports_vision": "image" in input_modalities,
+            "supports_audio": "audio" in input_modalities,
+            "input_modalities": input_modalities,
+            "supported_parameters": supported_params,
+            "max_completion_tokens": int(max_completion_tokens) if max_completion_tokens else None,
             "is_free": is_free,
             "featured": model_id in FEATURED_MODEL_IDS,
         }
@@ -246,9 +258,33 @@ class OpenRouterCatalog:
         return True
 
     @classmethod
+    def model_supports_modality(cls, model_id: str, modality: str) -> bool:
+        """Returns whether the model accepts the given input modality ('image', 'audio', 'file', ...)."""
+        info = cls.get_cached_model_info(model_id)
+        if info is None:
+            return False
+        return modality in (info.get("input_modalities") or [])
+
+    @classmethod
+    def model_supports_parameter(cls, model_id: str, parameter: str) -> bool:
+        """
+        Returns whether the model advertises a request parameter (e.g. 'temperature', 'reasoning').
+        Unknown models are assumed NOT to support it, so optional params are simply omitted.
+        """
+        info = cls.get_cached_model_info(model_id)
+        if info is None:
+            return False
+        return parameter in (info.get("supported_parameters") or [])
+
+    @classmethod
+    def get_max_completion_tokens(cls, model_id: str) -> Optional[int]:
+        info = cls.get_cached_model_info(model_id)
+        return info.get("max_completion_tokens") if info else None
+
+    @classmethod
     def _get_fallback_models(cls) -> List[Dict[str, Any]]:
         """Fallback list used only if OpenRouter /models endpoint is temporarily unreachable."""
-        return [
+        models: List[Dict[str, Any]] = [
             {
                 "id": "openai/gpt-5",
                 "name": "OpenAI: GPT-5",
@@ -315,6 +351,14 @@ class OpenRouterCatalog:
                 "featured": True,
             },
         ]
+        for m in models:
+            vision = m["provider"] != "qwen"
+            m.setdefault("input_modalities", ["text", "image"] if vision else ["text"])
+            m.setdefault("supports_vision", vision)
+            m.setdefault("supports_audio", False)
+            m.setdefault("supported_parameters", ["tools", "tool_choice", "max_tokens"])
+            m.setdefault("max_completion_tokens", None)
+        return models
 
 
 class OpenRouterProvider(BaseLLMProvider):
@@ -344,6 +388,65 @@ class OpenRouterProvider(BaseLLMProvider):
                 },
             )
 
+    async def transcribe_audio(self, audio_b64: str, audio_format: str) -> Optional[str]:
+        """Transcribes an audio clip with an audio-capable model (settings.AUDIO_TRANSCRIPTION_MODEL)."""
+        if not self.client:
+            return None
+        try:
+            response = await self.client.chat.completions.create(
+                model=settings.AUDIO_TRANSCRIPTION_MODEL,
+                temperature=0,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "Transcreva fielmente este áudio, no idioma original. "
+                                "Responda apenas com a transcrição, sem comentários."
+                            ),
+                        },
+                        {"type": "input_audio", "input_audio": {"data": audio_b64, "format": audio_format}},
+                    ],
+                }],
+            )
+            return (response.choices[0].message.content or "").strip() or None
+        except Exception as e:
+            logger.warning(f"[OpenRouter] Audio transcription failed ({settings.AUDIO_TRANSCRIPTION_MODEL}): {e}")
+            return None
+
+    @staticmethod
+    def resolve_generation_params(
+        target_model: str,
+        requested: Optional[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Translates profile-level generation preferences into OpenRouter request parameters,
+        keeping only those the target model advertises in `supported_parameters`
+        (e.g. openai/gpt-5 rejects `temperature`; qwen3-coder has no `reasoning`).
+        """
+        if not requested:
+            return {}
+
+        resolved: Dict[str, Any] = {}
+        supports = lambda p: OpenRouterCatalog.model_supports_parameter(target_model, p)
+
+        temperature = requested.get("temperature")
+        if temperature is not None and supports("temperature"):
+            resolved["temperature"] = float(temperature)
+
+        max_tokens = requested.get("max_tokens")
+        if max_tokens and supports("max_tokens"):
+            model_cap = OpenRouterCatalog.get_max_completion_tokens(target_model)
+            resolved["max_tokens"] = min(int(max_tokens), model_cap) if model_cap else int(max_tokens)
+
+        effort = requested.get("reasoning_effort")
+        if effort and supports("reasoning"):
+            # OpenRouter unified reasoning parameter; the reasoning text itself is not streamed to the UI.
+            resolved["extra_body"] = {"reasoning": {"effort": effort, "exclude": True}}
+
+        return resolved
+
     async def generate_stream(
         self,
         messages: List[Dict[str, str]],
@@ -351,7 +454,8 @@ class OpenRouterProvider(BaseLLMProvider):
         system_prompt: Optional[str] = None,
         web_search_context: Optional[str] = None,
         tools_mode: str = "disabled",
-        tool_interaction: Optional[Dict[str, Any]] = None
+        tool_interaction: Optional[Dict[str, Any]] = None,
+        generation_params: Optional[Dict[str, Any]] = None
     ) -> AsyncGenerator[StreamItem, None]:
         if not self.client:
             raise ProviderNotConfiguredException(
@@ -383,7 +487,8 @@ class OpenRouterProvider(BaseLLMProvider):
             web_search_context=web_search_context,
             tools_mode=effective_tools_mode,
             tool_interaction=tool_interaction,
-            provider_label="OpenRouter"
+            provider_label="OpenRouter",
+            generation_params=self.resolve_generation_params(target_model, generation_params)
         ):
             # Tag UsageMetadata with the upstream provider family (e.g. 'openai', 'anthropic', 'google', etc.)
             if hasattr(item, "provider") and hasattr(item, "prompt_tokens"):

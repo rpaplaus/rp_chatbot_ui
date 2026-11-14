@@ -52,7 +52,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-rp_admin}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rp_secure_postgres_pass}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       POSTGRES_DB: ${POSTGRES_DB:-rp_chatbot}
     ports:
       - "${POSTGRES_PORT:-5438}:5432"
@@ -74,13 +74,13 @@ services:
     image: redis:7-alpine
     container_name: rp_redis
     restart: unless-stopped
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-rp_secure_redis_pass}", "--appendonly", "yes"]
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}", "--appendonly", "yes"]
     ports:
       - "${REDIS_PORT:-6388}:6379"
     volumes:
       - rp_redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-rp_secure_redis_pass}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -100,8 +100,8 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://${POSTGRES_USER:-rp_admin}:${POSTGRES_PASSWORD:-rp_secure_postgres_pass}@database:5432/${POSTGRES_DB:-rp_chatbot}}
-      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD:-rp_secure_redis_pass}@redis:6379/0}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://${POSTGRES_USER:-rp_admin}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@database:5432/${POSTGRES_DB:-rp_chatbot}}
+      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}@redis:6379/0}
       PORT: "8000"
     ports:
       - "${BACKEND_PORT:-8002}:8000"

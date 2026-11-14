@@ -36,6 +36,14 @@ class ChatCompletionRequest(BaseModel):
     web_search_mode: Optional[str] = Field(default="auto", pattern="^(auto|always|disabled)$")
     client_timezone: Optional[str] = Field(default=None, max_length=100, example="America/Sao_Paulo")
     client_local_time: Optional[str] = Field(default=None, max_length=64, example="2026-10-28 15:47")
+    temperature: Optional[float] = Field(
+        default=None, ge=0.0, le=2.0,
+        description="Sobrescreve a temperatura padrão do perfil (ignorada por modelos que não a suportam)."
+    )
+    reasoning_effort: Optional[str] = Field(
+        default=None, pattern="^(none|minimal|low|medium|high)$",
+        description="Sobrescreve o esforço de raciocínio do perfil ('none' desativa)."
+    )
 
     @model_validator(mode="after")
     def validate_message_or_messages(self) -> "ChatCompletionRequest":

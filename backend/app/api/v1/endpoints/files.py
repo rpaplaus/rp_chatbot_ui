@@ -4,13 +4,14 @@ import uuid
 import aiofiles
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status
 from app.api.deps import get_current_active_user
+from app.core.config import settings
 from app.models.user import User
 from app.schemas.upload import FileUploadResponse
 from app.services.file_parser import FileParserService
 
 router = APIRouter(prefix="/files", tags=["Files"])
 
-UPLOAD_DIR = os.getenv("UPLOAD_DIR", "/app/uploads")
+UPLOAD_DIR = settings.UPLOAD_DIR
 
 # Ensure upload directory exists
 os.makedirs(UPLOAD_DIR, exist_ok=True)

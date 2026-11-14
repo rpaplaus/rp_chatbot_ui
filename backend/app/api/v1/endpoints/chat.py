@@ -102,7 +102,12 @@ async def chat_completion_stream(
     )
     hist_res = await db.execute(hist_stmt)
     history_messages = hist_res.scalars().all()
-    db_history = [{"role": m.role, "content": m.content} for m in history_messages]
+    db_history = []
+    for m in history_messages:
+        entry: Dict[str, Any] = {"role": m.role, "content": m.content}
+        if m.role == "assistant" and isinstance(m.metadata_json, dict) and m.metadata_json.get("tool_context"):
+            entry["tool_context"] = m.metadata_json["tool_context"]
+        db_history.append(entry)
 
     # If payload explicitly provided a messages array (e.g. headless / external API flow), prioritize it
     if request.messages and len(request.messages) > 0:
@@ -134,6 +139,7 @@ async def chat_completion_stream(
         captured_usage: Optional[Dict[str, Any]] = None
         was_cached: bool = False
         cache_store_candidate: Optional[Dict[str, Any]] = None
+        tool_context: Optional[Dict[str, Any]] = None
 
         try:
             async for event in orchestrator.stream_chat(
@@ -145,7 +151,9 @@ async def chat_completion_stream(
                 client_timezone=client_timezone,
                 client_local_time=client_local_time,
                 profile_id=profile_id,
-                user_id=user_id_val
+                user_id=user_id_val,
+                temperature=request.temperature,
+                reasoning_effort=request.reasoning_effort
             ):
                 event_type = event["event"]
                 event_data = event["data"]
@@ -160,6 +168,7 @@ async def chat_completion_stream(
                     captured_usage = event_data.get("usage")
                     was_cached = bool(event_data.get("cached", False))
                     cache_store_candidate = event_data.pop("cache_store_candidate", None)
+                    tool_context = event_data.pop("tool_context", None)
 
                 # Format SSE packet
                 payload = json.dumps(event_data, ensure_ascii=False)
@@ -168,14 +177,17 @@ async def chat_completion_stream(
             # 5. Persist the Assistant's response to PostgreSQL in a dedicated session
             if accumulated_text:
                 async with AsyncSessionLocal() as post_db:
+                    assistant_metadata: Dict[str, Any] = {
+                        "model": resolved_model_id or target_model_name,
+                        "sources": sources_metadata
+                    }
+                    if tool_context:
+                        assistant_metadata["tool_context"] = tool_context
                     assistant_msg = ChatMessage(
                         session_id=session_id,
                         role="assistant",
                         content=accumulated_text,
-                        metadata_json={
-                            "model": resolved_model_id or target_model_name,
-                            "sources": sources_metadata
-                        }
+                        metadata_json=assistant_metadata
                     )
                     post_db.add(assistant_msg)
 

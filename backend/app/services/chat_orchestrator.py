@@ -4,8 +4,11 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import re
 import logging
+from app.core.config import settings
 from app.services.llm.factory import LLMFactory
-from app.services.llm.base import LLMProviderException, UsageMetadata
+from app.services.llm.base import LLMProviderException, UsageMetadata, message_text
+from app.services.llm.multimodal import build_user_content
+from app.services.llm.openrouter_provider import OpenRouterCatalog
 from app.services.llm.tools import ToolCallRequest
 from app.services.web_search import WebSearchService
 from app.services.cost_engine import CostEngine
@@ -82,6 +85,17 @@ class ChatOrchestrator:
     # Alias for backwards compatibility
     BASE_GENERALIST_PROFILE = PROFILE_SOFTWARE_ENGINEER
 
+    # Sampling / reasoning defaults per profile. Params unsupported by the chosen model are dropped
+    # by the provider (e.g. openai/gpt-5 has no `temperature`).
+    PROFILE_GENERATION_DEFAULTS: Dict[str, Dict[str, Any]] = {
+        "software_engineer": {"temperature": 0.2, "reasoning_effort": "medium"},
+        "cybernexus_soc": {"temperature": 0.2, "reasoning_effort": "high"},
+        "general_assistant": {"temperature": 0.7, "reasoning_effort": "low"},
+        "code_specialist": {"temperature": 0.1, "reasoning_effort": "medium"},
+    }
+
+    MAX_PRIOR_TOOL_CONTEXTS = 2
+
     FAILURE_MARKERS = (
         "⚠️ *Erro",
         "[OpenRouter Error:",
@@ -119,6 +133,46 @@ class ChatOrchestrator:
 
     def __init__(self):
         self.search_service = WebSearchService()
+
+    @classmethod
+    def resolve_generation_params(
+        cls,
+        profile_id: str,
+        supports_web_search: bool = True,
+        temperature: Optional[float] = None,
+        reasoning_effort: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Merges profile generation defaults with optional per-request overrides."""
+        normalized = (profile_id or "software_engineer").strip().lower()
+        if not supports_web_search:
+            normalized = "code_specialist"
+        params = dict(cls.PROFILE_GENERATION_DEFAULTS.get(normalized, cls.PROFILE_GENERATION_DEFAULTS["software_engineer"]))
+        params["max_tokens"] = settings.LLM_MAX_OUTPUT_TOKENS
+        if temperature is not None:
+            params["temperature"] = temperature
+        if reasoning_effort:
+            params["reasoning_effort"] = reasoning_effort
+        return params
+
+    @classmethod
+    def build_prior_tool_context_block(cls, messages: List[Dict[str, Any]]) -> str:
+        """
+        Re-injects compact web search results used by earlier assistant turns (still inside the
+        context window), so follow-ups like "e a fonte 2?" keep working.
+        """
+        contexts = [m["tool_context"] for m in messages if m.get("role") == "assistant" and m.get("tool_context")]
+        contexts = contexts[-cls.MAX_PRIOR_TOOL_CONTEXTS:]
+        if not contexts:
+            return ""
+
+        block = (
+            "--- Pesquisas Web Realizadas Anteriormente Nesta Conversa ---\n"
+            "Use estes resultados como referência para perguntas de seguimento. "
+            "Se precisar de dados mais recentes ou não presentes aqui, faça uma nova pesquisa.\n"
+        )
+        for idx, ctx in enumerate(contexts, start=1):
+            block += f"\n[Pesquisa anterior {idx}] Consulta: {ctx.get('query', '')}\n{ctx.get('context', '')}\n"
+        return block
 
     def _build_effective_system_prompt(
         self,
@@ -247,11 +301,15 @@ class ChatOrchestrator:
                     logger.info("[Context Sanitization] Discarded failed/orphaned assistant turn from history.")
                     continue
 
+            clean_msg: Dict[str, Any] = {"role": role, "content": content}
+            if role == "assistant" and msg.get("tool_context"):
+                clean_msg["tool_context"] = msg["tool_context"]
+
             # Ensure strict alternation (avoid consecutive user->user if a prior assistant turn was missing)
             if sanitized and sanitized[-1].get("role") == role and role == "user":
-                sanitized[-1] = {"role": role, "content": content}
+                sanitized[-1] = clean_msg
             else:
-                sanitized.append({"role": role, "content": content})
+                sanitized.append(clean_msg)
 
         if len(sanitized) <= 1:
             return sanitized
@@ -300,11 +358,11 @@ class ChatOrchestrator:
             return raw_query
 
         # Read last N messages of history
-        recent_messages = [m for m in messages if (m.get("content") or "").strip()][-n_history:]
+        recent_messages = [m for m in messages if message_text(m).strip()][-n_history:]
         if not recent_messages:
             return raw_query
 
-        history_text = " ".join(m.get("content", "") for m in recent_messages).lower()
+        history_text = " ".join(message_text(m) for m in recent_messages).lower()
 
         # Detect cybersecurity domain markers in recent conversation history
         cyber_markers = [
@@ -326,7 +384,7 @@ class ChatOrchestrator:
         if is_cyber_context and contains_stack_term:
             # Check if user explicitly requested these stack terms in their recent user prompts
             recent_user_text = " ".join(
-                m.get("content", "").lower() for m in recent_messages if m.get("role") == "user"
+                message_text(m).lower() for m in recent_messages if m.get("role") == "user"
             )
             hallucinated_in_query = [t for t in stack_hallucination_terms if t in query_lower]
             truly_requested = [t for t in hallucinated_in_query if t in recent_user_text]
@@ -381,7 +439,9 @@ class ChatOrchestrator:
         client_timezone: Optional[str] = None,
         client_local_time: Optional[str] = None,
         profile_id: str = "software_engineer",
-        user_id: Optional[Any] = None
+        user_id: Optional[Any] = None,
+        temperature: Optional[float] = None,
+        reasoning_effort: Optional[str] = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Dual-Stream Agentic Generator yielding discrete SSE event payloads:
@@ -466,29 +526,24 @@ class ChatOrchestrator:
                     }
                     return
 
-            # 4. Handle File Context Injection on the active user message
-            enriched_messages = [dict(m) for m in pruned_messages]
+            # 4. Strip internal tool_context keys before sending, and build multimodal content
+            #    (image_url / input_audio parts, or transcription) for the active user message.
+            prior_tool_context_block = self.build_prior_tool_context_block(pruned_messages)
+            enriched_messages = [{"role": m["role"], "content": m["content"]} for m in pruned_messages]
             if file_contexts and enriched_messages:
-                file_text_bundle = ""
-                for file_data in file_contexts:
-                    fname = file_data.get("filename", "arquivo")
-                    ftype = file_data.get("type", "text")
-                    fcontent = file_data.get("content", "")
-
-                    if ftype == "text":
-                        file_text_bundle += f"\n\n--- Conteúdo do Arquivo ({fname}) ---\n{fcontent}\n--- Fim do Arquivo ---\n"
-                    elif ftype == "image":
-                        file_text_bundle += f"\n\n[Imagem Anexada: {fname}]"
-                    elif ftype == "audio":
-                        file_text_bundle += f"\n\n[Áudio Anexado: {fname}]"
-                    else:
-                        file_text_bundle += f"\n\n[Anexo: {fname} - {fcontent}]"
-
-                if file_text_bundle:
-                    for m in reversed(enriched_messages):
-                        if m.get("role") == "user":
-                            m["content"] = f"{m.get('content', '')}{file_text_bundle}"
-                            break
+                # Modality support comes from the catalog, which must be loaded before building parts.
+                await OpenRouterCatalog.get_models()
+                for m in reversed(enriched_messages):
+                    if m.get("role") == "user":
+                        m["content"] = await build_user_content(
+                            text=m.get("content", ""),
+                            file_contexts=file_contexts,
+                            supports_modality=lambda modality: OpenRouterCatalog.model_supports_modality(
+                                target_model_id, modality
+                            ),
+                            transcribe=getattr(provider, "transcribe_audio", None)
+                        )
+                        break
 
             # 5. Build Effective System Prompt tailored to Provider Specialization & Active Profile
             effective_system_prompt = self._build_effective_system_prompt(
@@ -498,6 +553,16 @@ class ChatOrchestrator:
                 supports_web_search=provider.supports_web_search,
                 profile_id=profile_id
             )
+            if prior_tool_context_block:
+                effective_system_prompt = f"{effective_system_prompt}\n\n{prior_tool_context_block}"
+
+            generation_params = self.resolve_generation_params(
+                profile_id=profile_id,
+                supports_web_search=provider.supports_web_search,
+                temperature=temperature,
+                reasoning_effort=reasoning_effort
+            )
+            tool_context: Optional[Dict[str, Any]] = None
 
             # 6. Turn 1: Stream from LLM with Agentic Tool Calling (if supported and enabled)
             full_response_text = ""
@@ -512,7 +577,8 @@ class ChatOrchestrator:
                 system_prompt=effective_system_prompt,
                 web_search_context=None,
                 tools_mode=effective_tools_mode,
-                tool_interaction=None
+                tool_interaction=None,
+                generation_params=generation_params
             )
 
             async for item in turn1_stream:
@@ -556,6 +622,10 @@ class ChatOrchestrator:
                 if search_results:
                     tool_output_text = self.search_service.format_search_context(search_results)
                     sources_metadata = self.search_service.format_sources_metadata(search_results, search_query)
+                    tool_context = {
+                        "query": search_query,
+                        "context": self.search_service.format_compact_context(search_results)
+                    }
                     yield {
                         "event": "sources",
                         "data": sources_metadata
@@ -581,7 +651,8 @@ class ChatOrchestrator:
                     tool_interaction={
                         "call": pending_tool_call,
                         "output": tool_output_text
-                    }
+                    },
+                    generation_params=generation_params
                 )
 
                 async for item2 in turn2_stream:
@@ -626,6 +697,7 @@ class ChatOrchestrator:
                     "full_response": full_response_text,
                     "cached": False,
                     "cache_store_candidate": cache_store_candidate,
+                    "tool_context": tool_context,
                     "usage": {
                         "prompt_tokens": total_prompt_tokens,
                         "completion_tokens": total_completion_tokens,

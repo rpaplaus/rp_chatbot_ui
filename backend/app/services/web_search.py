@@ -5,6 +5,7 @@ from typing import List, Dict, Any, Optional
 import httpx
 from bs4 import BeautifulSoup
 from app.core.config import settings
+from app.services.passage_selector import select_relevant_passages
 
 logger = logging.getLogger(__name__)
 
@@ -15,8 +16,11 @@ class WebSearchService:
     and Deep Page Scraping (HTML & Table-to-Markdown extraction for the top 2 results).
     """
 
-    TOP_SCRAPE_COUNT = 2
-    MAX_PAGE_CHARS = 4000
+    TOP_SCRAPE_COUNT = 3
+    # Budget of query-relevant passages kept per page (after BM25 selection).
+    MAX_PAGE_CHARS = 5000
+    # Upper bound of raw page text considered before passage selection.
+    RAW_PAGE_CHARS = 80000
     SCRAPE_TIMEOUT_SECONDS = 6.0
 
     DEFAULT_HEADERS = {
@@ -54,7 +58,8 @@ class WebSearchService:
     async def search(self, query: str, max_results: int = 5) -> List[Dict[str, str]]:
         """
         Executes search asynchronously across Tavily and DuckDuckGo,
-        then performs concurrent Deep Scraping (Full Page + Markdown Tables) on the Top 2 URLs.
+        then performs concurrent Deep Scraping (Full Page + Markdown Tables) on the Top N URLs,
+        keeping only the passages most relevant to the query.
         """
         clean_query = self.extract_search_query(query)
         if not clean_query:
@@ -65,7 +70,7 @@ class WebSearchService:
             return []
 
         # Enrich the top N results with deep page text & structured Markdown tables
-        await self._enrich_top_results(results, top_n=self.TOP_SCRAPE_COUNT)
+        await self._enrich_top_results(results, top_n=self.TOP_SCRAPE_COUNT, query=clean_query)
         return results
 
     def _sync_search(self, clean_query: str, max_results: int) -> List[Dict[str, str]]:
@@ -87,14 +92,46 @@ class WebSearchService:
                         "title": r.get("title", "Sem título"),
                         "url": r.get("url", ""),
                         "snippet": r.get("content", ""),
-                        "full_content": raw_content[:self.MAX_PAGE_CHARS] if raw_content else ""
+                        "full_content": select_relevant_passages(
+                            raw_content[:self.RAW_PAGE_CHARS], clean_query, self.MAX_PAGE_CHARS
+                        ) if raw_content else ""
                     })
                 if results:
                     return results
             except Exception as e:
-                logger.warning(f"Tavily search error: {e}. Falling back to DuckDuckGo.")
+                logger.warning(f"Tavily search error: {e}. Falling back to Serper/DuckDuckGo.")
 
-        # 2. Try DuckDuckGo
+        # 2. Try Serper (Google results) if configured
+        serper_key = (settings.SERPER_API_KEY or "").strip()
+        if serper_key:
+            try:
+                with httpx.Client(timeout=10.0) as client:
+                    resp = client.post(
+                        "https://google.serper.dev/search",
+                        headers={"X-API-KEY": serper_key, "Content-Type": "application/json"},
+                        json={"q": clean_query, "num": max_results},
+                    )
+                    resp.raise_for_status()
+                    payload = resp.json()
+                for r in (payload.get("organic") or [])[:max_results]:
+                    url = r.get("link") or ""
+                    if not url:
+                        continue
+                    snippet = r.get("snippet") or ""
+                    if r.get("date"):
+                        snippet = f"({r['date']}) {snippet}"
+                    results.append({
+                        "title": r.get("title") or "Página da Web",
+                        "url": url,
+                        "snippet": snippet,
+                        "full_content": ""
+                    })
+                if results:
+                    return results
+            except Exception as e:
+                logger.warning(f"Serper search error: {e}. Falling back to DuckDuckGo.")
+
+        # 3. Try DuckDuckGo
         try:
             try:
                 from ddgs import DDGS
@@ -122,7 +159,7 @@ class WebSearchService:
 
         return results
 
-    async def _enrich_top_results(self, results: List[Dict[str, str]], top_n: int = 2) -> None:
+    async def _enrich_top_results(self, results: List[Dict[str, str]], top_n: int = 3, query: str = "") -> None:
         """
         Concurrently fetches and parses full HTML & tables from the top N search result URLs.
         """
@@ -136,7 +173,7 @@ class WebSearchService:
             headers=self.DEFAULT_HEADERS
         ) as client:
             tasks = [
-                self._fetch_and_extract_single_page(client, item)
+                self._fetch_and_extract_single_page(client, item, query)
                 for item in targets
             ]
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -144,7 +181,8 @@ class WebSearchService:
     async def _fetch_and_extract_single_page(
         self,
         client: httpx.AsyncClient,
-        item: Dict[str, str]
+        item: Dict[str, str],
+        query: str = ""
     ) -> None:
         """Fetches a single URL and populates item['full_content'] with structured text & tables."""
         if item.get("full_content"):
@@ -169,9 +207,10 @@ class WebSearchService:
             extracted = await asyncio.to_thread(
                 self.extract_structured_html_content,
                 html_text,
-                self.MAX_PAGE_CHARS
+                self.RAW_PAGE_CHARS
             )
             if extracted:
+                extracted = select_relevant_passages(extracted, query, self.MAX_PAGE_CHARS)
                 item["full_content"] = extracted
                 logger.info(
                     f"[Deep Scraping] Extracted {len(extracted)} chars (including tables) from {url}"
@@ -272,6 +311,28 @@ class WebSearchService:
             "exatamente ao evento específico perguntado, referenciando as fontes como [1], [2], etc."
         )
         return formatted
+
+    @staticmethod
+    def format_compact_context(
+        results: List[Dict[str, str]],
+        max_chars: int = 4000,
+        per_source_chars: int = 900
+    ) -> str:
+        """
+        Compact version of the search results persisted with the assistant message, so later
+        turns can be grounded on the same sources without re-running the search.
+        """
+        lines: List[str] = []
+        used = 0
+        for idx, item in enumerate(results, start=1):
+            body = (item.get("full_content") or item.get("snippet") or "").strip()
+            body = re.sub(r"\s+", " ", body)[:per_source_chars]
+            entry = f"[{idx}] {item.get('title', '').strip()} ({item.get('url', '').strip()})\n{body}"
+            if used + len(entry) > max_chars:
+                break
+            lines.append(entry)
+            used += len(entry)
+        return "\n".join(lines)
 
     @staticmethod
     def format_sources_metadata(results: List[Dict[str, str]], query: str = "") -> Dict[str, Any]:

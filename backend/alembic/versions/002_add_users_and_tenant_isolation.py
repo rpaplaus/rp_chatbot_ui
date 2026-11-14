@@ -42,7 +42,7 @@ def upgrade() -> None:
     admin_id = uuid.uuid4()
     admin_username = (settings.APP_USER or "rpaplaus").strip()
     admin_email = (settings.APP_EMAIL or f"{admin_username}@rpaplaus.com").strip()
-    admin_hashed_pw = hash_password(settings.APP_PASSWORD or "Dumai!605Bacon")
+    admin_hashed_pw = hash_password(settings.APP_PASSWORD)
 
     users_table = sa.table(
         "users",

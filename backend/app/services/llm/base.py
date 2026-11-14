@@ -28,6 +28,19 @@ class UsageMetadata:
 StreamItem = Union[str, ToolCallRequest, UsageMetadata]
 
 
+def message_text(message: Dict[str, Any]) -> str:
+    """Returns the plain-text portion of a message whose content may be a string or multimodal parts."""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            part.get("text", "") for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return ""
+
+
 class LLMProviderException(Exception):
     """Base exception for LLM provider errors."""
     pass
@@ -62,10 +75,12 @@ class BaseLLMProvider(ABC):
         system_prompt: Optional[str] = None,
         web_search_context: Optional[str] = None,
         tools_mode: str = "disabled",
-        tool_interaction: Optional[Dict[str, Any]] = None
+        tool_interaction: Optional[Dict[str, Any]] = None,
+        generation_params: Optional[Dict[str, Any]] = None
     ) -> AsyncGenerator[StreamItem, None]:
         """
         Asynchronously streams text tokens (`str`), a `ToolCallRequest`, or `UsageMetadata`.
+        `generation_params` may contain `temperature`, `max_tokens` and `reasoning_effort`.
         """
         pass
 
@@ -111,7 +126,8 @@ class BaseLLMProvider(ABC):
         web_search_context: Optional[str] = None,
         tools_mode: str = "disabled",
         tool_interaction: Optional[Dict[str, Any]] = None,
-        provider_label: str = "OpenAI"
+        provider_label: str = "OpenAI",
+        generation_params: Optional[Dict[str, Any]] = None
     ) -> AsyncGenerator[StreamItem, None]:
         """
         Shared streaming engine for OpenAI-compatible SDKs (OpenAI, xAI Grok, Qwen DashScope).
@@ -153,6 +169,8 @@ class BaseLLMProvider(ABC):
             "stream": True,
             "stream_options": {"include_usage": True}
         }
+        if generation_params:
+            create_kwargs.update(generation_params)
 
         if not tool_interaction and tools_mode in ("auto", "always"):
             tools_list, tool_choice = get_openai_tools_and_choice(tools_mode)
@@ -221,7 +239,7 @@ class BaseLLMProvider(ABC):
 
                 # Fallback query uses the last user message if arguments were empty
                 last_user = next(
-                    (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
+                    (message_text(m) for m in reversed(messages) if m.get("role") == "user"),
                     ""
                 )
                 parsed_query = parse_tool_query(raw_args_str, fallback_query=last_user[:200])
