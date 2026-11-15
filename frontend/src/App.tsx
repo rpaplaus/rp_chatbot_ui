@@ -9,6 +9,7 @@ import { ChatInput } from './components/chat/ChatInput';
 import { SettingsModal } from './components/header/SettingsModal';
 import { TelemetryDashboard } from './components/telemetry/TelemetryDashboard';
 import { AuthGuard } from './components/auth/AuthGuard';
+import { PWAStatus } from './components/pwa/PWAStatus';
 
 const AuthenticatedWorkspace: React.FC = () => {
   const { initApp, uploadFiles, resetChatState } = useChatStore();
@@ -45,7 +46,7 @@ const AuthenticatedWorkspace: React.FC = () => {
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className="flex h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 relative"
+      className="flex h-dvh w-screen overflow-hidden bg-slate-950 text-slate-100 relative"
     >
       {/* Drag & Drop Overlay */}
       {isDragging && (
@@ -79,9 +80,12 @@ const AuthenticatedWorkspace: React.FC = () => {
 
 export const App: React.FC = () => {
   return (
-    <AuthGuard>
-      <AuthenticatedWorkspace />
-    </AuthGuard>
+    <>
+      <AuthGuard>
+        <AuthenticatedWorkspace />
+      </AuthGuard>
+      <PWAStatus />
+    </>
   );
 };
 
